@@ -5,7 +5,7 @@ from app.database import Base
 
 
 class Character(Base):
-    __tablename__ = "character"
+    __tablename__ = "characters"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, default="Player")
@@ -13,7 +13,11 @@ class Character(Base):
     total_xp = Column(Integer, default=0)
     hp = Column(Integer, default=100)
     max_hp = Column(Integer, default=100)
-    last_penalty_chek = Column(Date, default=date.today)
+    primary_stat = Column(String, default="STR")       # Головний стат (+20% XP)
+    gender = Column(String, default="M")               # M або W
+    avatar_sprite = Column(String, default="str_m.png")
+    is_registered = Column(Boolean, default=False)     # Чи створено персонажа
+    last_penalty_check = Column(Date, default=date.today)
 
 
 class Stat(Base):
@@ -71,3 +75,14 @@ class ActionLog(Base):
     stat_code = Column(String)
     xp_change = Column(Integer)  # Може бути додатним (+25) або від'ємним (-20)
     timestamp = Column(DateTime, default=datetime.now)
+
+
+class Achievement(Base):
+    __tablename__ = "achievements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, index=True)  # напр. lvl_10, str_20, lost_level
+    title = Column(String)
+    description = Column(String)
+    sprite = Column(String)                         # напр. lvl_10.png
+    unlocked_at = Column(DateTime, default=datetime.now)

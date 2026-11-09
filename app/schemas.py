@@ -58,6 +58,16 @@ class QuestRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AchievementRead(BaseModel):
+    code: str
+    title: str
+    description: str
+    sprite: str
+    unlocked_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ActionLogRead(BaseModel):
     id: int
     action_type: str
@@ -69,11 +79,22 @@ class ActionLogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CharacterRegister(BaseModel):
+    name: str
+    primary_stat: str  # STR, INT, VIT, FOC
+    gender: str        # M або W
+
+
 class CharacterDashboard(BaseModel):
     name: str
     level: int
     total_xp: int
     hp: int
     max_hp: int
+    primary_stat: str
+    gender: str
+    avatar_sprite: str
+    is_registered: bool
     stats: List[StatRead]
     recent_logs: List[ActionLogRead]
+    achievements: List[AchievementRead] = []
