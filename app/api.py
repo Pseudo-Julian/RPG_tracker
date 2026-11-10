@@ -17,6 +17,12 @@ def read_dashboard(db: Session = Depends(get_db)):
     return crud.get_dashboard_data(db)
 
 
+@app.post("/register", response_model=schemas.CharacterDashboard)
+def register_hero(reg_in: schemas.CharacterRegister, db: Session = Depends(get_db)):
+    crud.register_character(db, reg_in)
+    return crud.get_dashboard_data(db)
+
+
 @app.get("/habits", response_model=List[schemas.HabitRead])
 def list_habits(db: Session = Depends(get_db)):
     crud.apply_daily_penalties(db)

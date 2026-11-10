@@ -18,7 +18,7 @@ DEFAULT_STATS = [
 
 
 def xp_for_next_level(level: int) -> int:
-    return int(100 * (level ** 1.5))
+    return int(100 * (level ** 1.2))
 
 def recalculate_character_level(db: Session, char: models.Character):
     """Загальний рівень персонажа = сер. арифметичне всіх рівнів stats"""
@@ -27,7 +27,7 @@ def recalculate_character_level(db: Session, char: models.Character):
         char.level = sum(s.level for s in stats) // len(stats)
 
 def init_character_and_stats(db: Session) -> models.Character:
-    """Create unit and base stats"""
+    """Створює персонажа та 4 базові характеристики при першому запуску."""
     char = db.query(models.Character).first()
     if not char:
         char = models.Character(
@@ -36,7 +36,11 @@ def init_character_and_stats(db: Session) -> models.Character:
             total_xp=0,
             hp=100,
             max_hp=100,
-            last_penalty_chek=date.today(),
+            primary_stat="STR",
+            gender="M",
+            avatar_sprite="str_m.png",
+            is_registered=False,
+            last_penalty_check=date.today(),
         )
         db.add(char)
         db.commit()
@@ -57,6 +61,90 @@ def init_character_and_stats(db: Session) -> models.Character:
     db.commit()
     return char
 
+MEDAL_CATALOG = {
+    "lvl_10": ("Рівень 10", "Досягнуто 10 загального рівня", "lvl_10.png"),
+    "lvl_20": ("Рівень 20", "Досягнуто 20 загального рівня", "lvl_20.png"),
+    "lvl_50": ("Рівень 50", "Досягнуто 50 загального рівня", "lvl_50.png"),
+    "lvl_100": ("Рівень 100", "Досягнуто 100 загального рівня", "lvl_100.png"),
+    "lvl_200": ("Рівень 200", "Досягнуто 200 загального рівня", "lvl_200.png"),
+    "str_20": ("STR 20", "Сила досягла 20 рівня", "str_20.png"),
+    "int_20": ("INT 20", "Інтелект досяг 20 рівня", "int_20.png"),
+    "vit_20": ("VIT 20", "Здоров'я досягло 20 рівня", "vit_20.png"),
+    "foc_20": ("FOC 20", "Фокус досяг 20 рівня", "foc_20.png"),
+    "str_100": ("STR 100", "Сила досягла 100 рівня", "str_100.png"),
+    "int_100": ("INT 100", "Інтелект досяг 100 рівня", "int_100.png"),
+    "vit_100": ("VIT 100", "Здоров'я досягло 100 рівня", "vit_100.png"),
+    "foc_100": ("FOC 100", "Фокус досяг 100 рівня", "foc_100.png"),
+    "no_penalty_50": ("50 днів без штрафів", "50 днів дисципліни без пропусків", "no_penalty_50.png"),
+    "no_penalty_100": ("100 днів без штрафів", "100 днів залізної дисципліни", "no_penalty_100.png"),
+    "lost_level": ("Ціна простою", "Втрачено рівень характеристики через пропуски", "lost_level.png"),
+}
+
+
+def unlock_medal(db: Session, code: str):
+    """Видає медаль, якщо вона ще не відкрита."""
+    if code not in MEDAL_CATALOG:
+        return
+    exists = db.query(models.Achievement).filter_by(code=code).first()
+    if not exists:
+        title, desc, sprite = MEDAL_CATALOG[code]
+        db.add(
+            models.Achievement(
+                code=code,
+                title=title,
+                description=desc,
+                sprite=sprite,
+                unlocked_at=datetime.now(),
+            )
+        )
+        db.commit()
+
+
+def check_and_unlock_achievements(db: Session):
+    """Перевіряє всі умови отримання медалей."""
+    char = db.query(models.Character).first()
+    if not char:
+        return
+
+    # 1. Загальні рівні: 10, 20, 50, 100, 200
+    for threshold in (10, 20, 50, 100, 200):
+        if char.level >= threshold:
+            unlock_medal(db, f"lvl_{threshold}")
+
+    # 2. Рівні окремих статів: 20 та 100 для STR, INT, VIT, FOC
+    stats = db.query(models.Stat).all()
+    for s in stats:
+        code_low = s.code.lower()
+        if s.level >= 20:
+            unlock_medal(db, f"{code_low}_20")
+        if s.level >= 100:
+            unlock_medal(db, f"{code_low}_100")
+
+    # 3. 50 та 100 днів без єдиного штрафу
+    last_penalty = (
+        db.query(models.ActionLog)
+        .filter(models.ActionLog.action_type.in_(["penalty_habit", "penalty_decay"]))
+        .order_by(models.ActionLog.timestamp.desc())
+        .first()
+    )
+    first_log = (
+        db.query(models.ActionLog)
+        .order_by(models.ActionLog.timestamp.asc())
+        .first()
+    )
+
+    if last_penalty:
+        clean_days = (date.today() - last_penalty.timestamp.date()).days
+    elif first_log:
+        clean_days = (date.today() - first_log.timestamp.date()).days
+    else:
+        clean_days = 0
+
+    if clean_days >= 50:
+        unlock_medal(db, "no_penalty_50")
+    if clean_days >= 100:
+        unlock_medal(db, "no_penalty_100")
+
 def modify_stat_xp(
     db: Session,
     stat: models.Stat,
@@ -65,29 +153,34 @@ def modify_stat_xp(
     title: str,
     update_activity_date: bool = True,
 ):
-    """Додає або мінусує XP зі stat з підтримкою Lev-Up та Hardcore De_Lev"""
+    """Додає або віднімає XP зі стата з урахуванням +20% бонусу головного стату."""
     char = db.query(models.Character).first()
-    stat.current_xp += xp_delta
 
     if xp_delta > 0:
+        # Пасивна особливість обраного класу: +20% XP для головного стату
+        if char.primary_stat == stat.code:
+            xp_delta = int(round(xp_delta * 1.20))
+
+        stat.current_xp += xp_delta
         char.total_xp += xp_delta
         if update_activity_date:
             stat.last_activity_date = date.today()
 
-        # check for Level_up
         while stat.current_xp >= xp_for_next_level(stat.level):
             stat.current_xp -= xp_for_next_level(stat.level)
             stat.level += 1
-            char.hp = min(char.max_hp, char.hp +10) # Бонус +10 HP за новий рівень
+            char.hp = min(char.max_hp, char.hp + 10)
 
     elif xp_delta < 0:
+        stat.current_xp += xp_delta
         char.total_xp = max(0, char.total_xp + xp_delta)
-        char.hp = max(1, char.hp - 5)  # Втрата HP за штраф
+        char.hp = max(1, char.hp - 5)
 
         while stat.current_xp < 0:
             if stat.level > 1:
                 stat.level -= 1
                 stat.current_xp += xp_for_next_level(stat.level)
+                unlock_medal(db, "lost_level")  # Медаль за втрату рівня через пропуски!
             else:
                 stat.current_xp = 0
                 break
@@ -104,12 +197,28 @@ def modify_stat_xp(
     db.add(log)
     db.commit()
 
+    check_and_unlock_achievements(db)
+
+def register_character(
+    db: Session, reg_in: schemas.CharacterRegister
+) -> models.Character:
+    """Зберігає обране ім'я, стать, спрайт та головний стат персонажа."""
+    char = init_character_and_stats(db)
+    char.name = reg_in.name.strip() or "Мандрівник"
+    char.primary_stat = reg_in.primary_stat.upper()
+    char.gender = reg_in.gender.upper()
+    char.avatar_sprite = f"{char.primary_stat.lower()}_{char.gender.lower()}.png"
+    char.is_registered = True
+    db.commit()
+    db.refresh(char)
+    return char
+
 def apply_daily_penalties(db: Session):
     """Перевіряє пропуски > 1 дня для daily task та загальний простій stats"""
     char = init_character_and_stats(db)
     today = date.today()
 
-    if char.last_penalty_chek >= today:
+    if char.last_penalty_check >= today:
         return
 
     habits = db.query(models.Habit).filter_by(is_daily=True).all()
@@ -221,12 +330,18 @@ def complete_quest(db: Session, quest_id: int) -> models.Quest:
 
 def get_dashboard_data(db: Session) -> schemas.CharacterDashboard:
     apply_daily_penalties(db)
+    check_and_unlock_achievements(db)
     char = db.query(models.Character).first()
     stats = db.query(models.Stat).all()
     logs = (
         db.query(models.ActionLog)
         .order_by(models.ActionLog.timestamp.desc())
         .limit(15)
+        .all()
+    )
+    achievements = (
+        db.query(models.Achievement)
+        .order_by(models.Achievement.unlocked_at.asc())
         .all()
     )
 
@@ -242,6 +357,11 @@ def get_dashboard_data(db: Session) -> schemas.CharacterDashboard:
         total_xp=char.total_xp,
         hp=char.hp,
         max_hp=char.max_hp,
+        primary_stat=char.primary_stat or "STR",
+        gender=char.gender or "M",
+        avatar_sprite=char.avatar_sprite or "str_m.png",
+        is_registered=bool(char.is_registered),
         stats=stat_reads,
         recent_logs=[schemas.ActionLogRead.model_validate(l) for l in logs],
+        achievements=[schemas.AchievementRead.model_validate(a) for a in achievements],
     )
